@@ -4,7 +4,7 @@ Claude Code mods, one per folder. This repository is a plugin marketplace.
 
 | Mod | What it does |
 | --- | --- |
-| [roadmap](roadmap/) | `/roadmap` shows a progress bar of the session's task list above the prompt. |
+| [roadmap](roadmap/) | `/roadmap` shows above the prompt how far the project roadmap is that this session works one item of. |
 
 ## Install
 

@@ -1,173 +1,186 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { RoadmapItem, RoadmapStatus } from '../types'
-import { addTask, applyPlan, bar, finishRunning, fromTodos, since, updateTask } from './plan'
+import type { RoadmapStatus } from '../types'
+import { bar, idFromTitle, isId, short } from './plan'
+import { findRoadmap } from './source'
 
-const items = atom({ plugin: 'roadmap', key: 'items' } as const, [])
-const step = atom({ plugin: 'roadmap', key: 'step' } as const, null)
+const view = atom({ plugin: 'roadmap', key: 'view' } as const, null)
+const problem = atom({ plugin: 'roadmap', key: 'problem' } as const, null)
+const sessionTitle = atom({ plugin: 'roadmap', key: 'sessionTitle' } as const, null)
+const pin = atom({ plugin: 'roadmap', key: 'pin' } as const, {})
 const isShown = atom({ plugin: 'roadmap', key: 'isShown' } as const, false)
 
-const PLAN_TOOL = 'mcp__ccd_turn__update_plan'
-const WRAP_UP_TOOL = 'mcp__ccd_turn__wrap_up'
-const LIST_TOOLS = ['TodoWrite', 'TaskCreate', 'TaskUpdate', PLAN_TOOL, WRAP_UP_TOOL]
+/** Read again at most this often while shown; a new title or /roadmap reads at once. */
+const REFRESH_MS = 2 * 60_000
 
-const COLOR: Record<RoadmapStatus, string> = {
-  completed: 'success',
-  in_progress: 'claude',
-  pending: 'inactive',
+const COLOR: Record<RoadmapStatus | 'current', string> = {
+  done: 'success',
+  active: 'suggestion',
+  open: 'inactive',
+  paused: 'subtle',
+  current: 'claude',
 }
 
 const ON = ['an', 'on', 'ein', 'show']
 const OFF = ['aus', 'off', 'hide']
 
+let lastLoad = 0
+let isStale = true
+
+async function reload($: EngineInterface) {
+  lastLoad = await $.clock.now()
+  isStale = false
+
+  const title = await read($, sessionTitle)
+  const pinned = await read($, pin)
+  const id = pinned.id ?? idFromTitle(title)
+
+  if (id === undefined) {
+    await update($, view, () => null)
+    await update($, problem, () =>
+      title
+        ? `der Session-Titel „${short(title, 40)}“ beginnt mit keiner Punkt-Nummer. /roadmap T.2 legt sie fest.`
+        : 'kein Session-Titel bekannt. /roadmap T.2 legt die Punkt-Nummer fest.',
+    )
+    return
+  }
+
+  const found = await findRoadmap($, { id, sessionTitle: title ?? '', file: pinned.file })
+  await update($, view, () => found ?? null)
+  await update($, problem, () =>
+    found
+      ? null
+      : `Punkt ${id} steht in keiner Roadmap${pinned.file ? ` (${pinned.file})` : ' unter docs/roadmap'}, auf keinem Branch.`,
+  )
+}
+
+async function noteTitle($: EngineInterface, title: string | undefined) {
+  if (title === undefined || title === '') return
+  if ((await read($, sessionTitle)) === title) return
+  await update($, sessionTitle, () => title)
+  isStale = true
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'roadmap',
-      description: 'Fortschrittsleiste der aktuellen Aufgabenliste ein- oder ausblenden',
-      argumentHint: '[an|aus]',
+      description: 'Fortschritt der übergreifenden Roadmap, aus der diese Session einen Punkt abarbeitet',
+      argumentHint: '[an|aus|T.2|pfad.md|auto]',
+    })
+    $.clock.every(30_000, () => {
+      void (async () => {
+        if (!(await read($, isShown))) return
+        if (isStale || (await $.clock.now()) - lastLoad > REFRESH_MS) await reload($)
+      })()
     })
 
     return next(e)
   })
 
+  // Only reads the title: a failure here must never hold up the session or a prompt.
+  on('classic.SessionStart', async ($, e, next) => {
+    await noteTitle($, e.session_title)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    await noteTitle($, e.session_title)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   on('command.run', { command: 'roadmap' }, async ($, e) => {
-    const arg = (e.args ?? '').trim().toLowerCase()
-    const wasShown = await read($, isShown)
-    const shown = ON.includes(arg) ? true : OFF.includes(arg) ? false : !wasShown
-    await update($, isShown, () => shown)
+    const arg = (e.args ?? '').trim()
+    const word = arg.toLowerCase()
 
-    return { text: shown ? 'Roadmap-Leiste eingeblendet.' : 'Roadmap-Leiste ausgeblendet.' }
-  })
-
-  on('tool.call', async ($, e, next) => {
-    const tool = String(e.tool)
-
-    // Subagents keep lists of their own; the roadmap follows the main session.
-    if (e.agentId !== undefined) return next(e)
-
-    if (!LIST_TOOLS.includes(tool)) {
-      await update($, step, current => (current === null ? null : { ...current, tools: current.tools + 1 }))
-
-      return next(e)
+    if (OFF.includes(word) || (word === '' && (await read($, isShown)))) {
+      await update($, isShown, () => false)
+      return { text: 'Roadmap-Leiste ausgeblendet.' }
     }
 
-    const ran = await next(e)
-    if (ran.deny !== undefined || ran.isError === true) return ran
+    if (isId(arg)) await update($, pin, current => ({ ...current, id: arg }))
+    else if (arg.endsWith('.md')) await update($, pin, current => ({ ...current, file: arg.replace(/\\/g, '/') }))
+    else if (word === 'auto') await update($, pin, () => ({}))
+    else if (word !== '' && !ON.includes(word)) {
+      return { text: 'Unbekannt. /roadmap [an|aus|T.2|pfad/zur/roadmap.md|auto]' }
+    }
 
-    const args = e as unknown as Record<string, unknown>
-    await update($, items, list => {
-      switch (tool) {
-        case 'TodoWrite':
-          return Array.isArray(args.todos) ? fromTodos(args.todos) : list
-        case 'TaskCreate': {
-          const created = (ran.result as { task?: { id?: unknown } } | undefined)?.task
-          return typeof created?.id === 'string' && typeof args.subject === 'string'
-            ? addTask(list, created.id, args.subject, args.activeForm as string | undefined)
-            : list
-        }
-        case 'TaskUpdate':
-          return typeof args.taskId === 'string'
-            ? updateTask(list, args as { taskId: string })
-            : list
-        case PLAN_TOOL:
-          return applyPlan(list, args)
-        default:
-          return finishRunning(list)
-      }
-    })
-    await followCurrent($)
+    await update($, isShown, () => true)
+    await reload($)
 
-    return ran
-  }).catch(($, e, next) => next(e))
+    const shown = await read($, view)
+    return {
+      text: shown
+        ? `Roadmap-Leiste: ${shown.currentId} in ${shown.file} (${shown.source}).`
+        : `Roadmap-Leiste eingeblendet, aber ${(await read($, problem)) ?? 'keine Roadmap gefunden.'}`,
+    }
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || !(await read($, isShown))) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
-    const list = await read($, items)
+    const roadmap = await read($, view)
 
-    if (list.length === 0) {
+    if (roadmap === null) {
+      const why = await read($, problem)
       return (
         <Box>
-          <Text dimColor>Roadmap: noch keine Aufgabenliste in dieser Session.</Text>
+          <Text dimColor>Roadmap: {why ?? 'wird gelesen …'}</Text>
         </Box>
       )
     }
 
-    const done = list.filter(item => item.status === 'completed').length
-    const percent = Math.round((done / list.length) * 100)
-    const width = Math.max(list.length, Math.min(48, e.props.bodyColumns - 32))
-    const position = list.findIndex(item => item.status === 'in_progress')
-    const current = position >= 0 ? list[position] : undefined
-    const open = list
-      .map((item, i) => ({ item, n: i + 1 }))
-      .filter(({ item }) => item.status === 'pending')
-    const running = await read($, step)
-    const now = await $.clock.now()
+    const cols = e.props.bodyColumns
+    const counted = roadmap.items.filter(item => item.status !== 'paused')
+    const done = counted.filter(item => item.status === 'done').length
+    const percent = counted.length === 0 ? 0 : Math.round((done / counted.length) * 100)
+    const current = roadmap.items.find(item => item.id === roadmap.currentId)
+    const open = roadmap.items.filter(
+      item => item.id !== roadmap.currentId && (item.status === 'open' || item.status === 'active'),
+    )
+    const width = Math.max(roadmap.items.length, Math.min(60, cols - 24))
+    const detail = [current?.stand && `Stand: ${current.stand}`, current?.next && `Nächster Schritt: ${current.next}`]
+      .filter(Boolean)
+      .join(' · ')
 
     return (
       <Box flexDirection="column">
+        <Text bold wrap="truncate-end">
+          {roadmap.title}
+        </Text>
         <Box flexDirection="row">
-          <Text bold>Roadmap </Text>
-          {bar(list, width).map(run => (
-            <Text mono color={COLOR[run.status]}>{run.text}</Text>
+          {bar(roadmap.items, roadmap.currentId, width).map(run => (
+            <Text mono color={COLOR[run.kind]}>{run.text}</Text>
           ))}
           <Text>
             {' '}
-            {done}/{list.length} erledigt · {percent} %
+            {done}/{counted.length} erledigt · {percent} %
           </Text>
         </Box>
-        {current !== undefined ? (
-          <Text wrap="truncate-end">
-            <Text color="claude" bold>
-              ▶ Jetzt ({position + 1}/{list.length}):{' '}
-            </Text>
-            {current.title}
-            <Text dimColor>{currentDetail(current, running, now)}</Text>
+        <Text wrap="truncate-end">
+          <Text color="claude" bold>
+            ▶ Diese Session: {roadmap.currentId}{' '}
           </Text>
-        ) : (
-          <Text dimColor={done < list.length} color={done === list.length ? 'success' : undefined}>
-            {done === list.length ? '✓ Alle Punkte erledigt' : 'Gerade ist kein Punkt in Arbeit.'}
+          {current?.title ?? '(nicht in der Roadmap)'}
+        </Text>
+        {detail !== '' && (
+          <Text dimColor wrap="truncate-end">
+            {'  '}
+            {detail}
           </Text>
         )}
         {open.length > 0 && (
           <Text wrap="wrap">
             <Text dimColor>Offen: </Text>
-            {open.map(({ item, n }) => `${n}. ${item.title}`).join('  ›  ')}
+            {open.map(item => `${item.status === 'active' ? '🔵 ' : ''}${item.id} ${short(item.title, 28)}`).join('  ›  ')}
           </Text>
         )}
+        <Text dimColor wrap="truncate-start">
+          {roadmap.file} · {roadmap.source}
+        </Text>
       </Box>
     )
   })
-}
-
-const currentDetail = (
-  current: RoadmapItem,
-  running: { title: string; startedAt: number; tools: number } | null,
-  now: number,
-): string => {
-  const parts: string[] = []
-  if (current.activeForm && current.activeForm !== current.title) parts.push(current.activeForm)
-  if (running !== null && running.title === current.title) {
-    parts.push(since(now - running.startedAt))
-    parts.push(running.tools === 1 ? '1 Aktion' : `${running.tools} Aktionen`)
-  }
-
-  return parts.length > 0 ? `  · ${parts.join(' · ')}` : ''
-}
-
-/** A new current item starts its own count; none running clears it. */
-const followCurrent = async ($: EngineInterface) => {
-  const list = await read($, items)
-  const current = list.find(item => item.status === 'in_progress')
-  const startedAt = await $.clock.now()
-  await update($, step, running =>
-    current === undefined
-      ? null
-      : running !== null && running.title === current.title
-        ? running
-        : { title: current.title, startedAt, tools: 0 },
-  )
 }

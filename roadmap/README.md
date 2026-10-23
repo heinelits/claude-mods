@@ -1,8 +1,22 @@
 # roadmap
 
-A Claude Code mod. `/roadmap` shows a progress bar above the prompt for the session's current task list: how many items are done, which item is running now (with time and tool calls so far), and the items still open, in order.
+A Claude Code mod. `/roadmap` shows a progress bar above the prompt for the project roadmap that this session works one item of: how many items are done, the session's own item with its status and next step, and the items still open, in order.
 
-It follows the task list Claude keeps in the session: `TodoWrite`, `TaskCreate`/`TaskUpdate` in the terminal, and the task list of the Claude desktop app. `/roadmap` toggles the bar; `/roadmap an` and `/roadmap aus` set it.
+**Which roadmap.** The session title starts with the item's number, such as `T.2: Mapping`. The mod looks for that number in the Markdown files under `docs/roadmap/` (and `ROADMAP.md`), in the newest committed version across all branches, so a roadmap kept on another session's branch is found too; a changed or new file in the working copy counts as well. Where several files hold the number, the one sharing the most words with the session title wins, then the newest.
+
+**What counts as an item.** A table row whose first cell is a number (`S.5`, `**T.1**`, `S.9b`), a heading that starts with one (`### S.4 — Title`), or a checklist line (`- [x] A.1 ...`). A row with ✅, `[x]`, gemergt, erledigt, abgeschlossen or done is done; 🔵 or "in Arbeit" is in work (shown with 🔵 among the open items); ⏸, zurückgestellt or abgelöst is set aside and not counted. A table's "Stand" and "Nächster Schritt" columns are shown for the session's own item.
+
+**Commands.**
+
+| Command | Does |
+| --- | --- |
+| `/roadmap` | shows or hides the bar |
+| `/roadmap an` / `/roadmap aus` | shows / hides it |
+| `/roadmap T.2` | sets the item for this session, where the title has no number |
+| `/roadmap docs/roadmap/plan.md` | reads only this file |
+| `/roadmap auto` | back to the session title and the search |
+
+The bar reads the roadmap again when shown, when the session title changes, and every two minutes while shown. It needs `git` for the branch search; without it, it reads the working copy.
 
 ## Install
 

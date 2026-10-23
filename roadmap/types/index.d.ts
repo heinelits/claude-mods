@@ -1,22 +1,43 @@
-export type RoadmapStatus = 'pending' | 'in_progress' | 'completed'
+/**
+ * done: a check mark, [x] or a done word · active: a blue dot or "in Arbeit"
+ * (any session) · paused: a pause mark, zurückgestellt, abgelöst · open: the rest.
+ */
+export type RoadmapStatus = 'done' | 'active' | 'open' | 'paused'
 
 export type RoadmapItem = {
+  /** The item's number in the roadmap, `T.2`. */
+  id: string
   title: string
   status: RoadmapStatus
-  /** TaskCreate/TaskUpdate: the task's id. */
-  id?: string
-  /** TodoWrite/TaskUpdate: what is being done right now. */
-  activeForm?: string
+  /** The row's "Stand"/"Status" cell, when its table has one. */
+  stand?: string
+  /** The row's "Nächster Schritt" cell, when its table has one. */
+  next?: string
 }
 
-/** Where the current item stands: since when it runs, how many tool calls it took. */
-export type RoadmapStep = { title: string; startedAt: number; tools: number }
+export type RoadmapView = {
+  /** The roadmap's own `# ` heading, else its file name. */
+  title: string
+  /** Path relative to the repository root. */
+  file: string
+  /** Where it was read: the working copy, or a branch and commit. */
+  source: string
+  items: RoadmapItem[]
+  /** The item this session works on. */
+  currentId: string
+}
+
+/** What `/roadmap` fixed for this session, over what the title says. */
+export type RoadmapPin = { id?: string; file?: string }
 
 declare module 'claude-code' {
   interface PluginState {
     roadmap: {
-      items: RoadmapItem[]
-      step: RoadmapStep | null
+      view: RoadmapView | null
+      /** Why there is no view, in words for the band. */
+      problem: string | null
+      sessionTitle: string | null
+      pin: RoadmapPin
       isShown: boolean
     }
   }
