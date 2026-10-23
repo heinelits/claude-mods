@@ -5,6 +5,7 @@ Claude Code mods, one per folder. This repository is a plugin marketplace.
 | Mod | What it does |
 | --- | --- |
 | [roadmap](roadmap/) | `/roadmap` shows above the prompt how far the project roadmap is that this session works one item of. |
+| [anleitung](anleitung/) | `/Anleitung` turns the session into a PDF handout for the people who use the software. |
 
 ## Install
 
@@ -35,5 +36,5 @@ Cloud sessions do not load installed plugins. To load the mods there, configure 
 - Environment variable, one path per mod, separated by `:`:
 
   ```
-  CLAUDE_CODE_PLUGIN_DIRS=/opt/claude-mods/roadmap
+  CLAUDE_CODE_PLUGIN_DIRS=/opt/claude-mods/roadmap:/opt/claude-mods/anleitung
   ```
