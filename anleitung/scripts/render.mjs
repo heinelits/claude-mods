@@ -109,6 +109,15 @@ const SEITE = { b: 595.28, h: 841.89 };
 const RAND = { links: 56, rechts: 56, oben: 54, unten: 68 };
 const INHALT_B = SEITE.b - RAND.links - RAND.rechts;
 
+/** Zeilenhoehe des Fliesstexts — Bezugsgroesse jeder Umbruch-Reserve. */
+const ZEILE = 10.5 * 1.45;
+
+/** So viel Text muss unter einer Ueberschrift noch aufs Blatt passen, sonst
+ *  wandert die Ueberschrift mit auf die neue Seite. Zwei Zeilen und nicht
+ *  eine: eine einzelne Zeile unter einer Ueberschrift sieht aus wie ein
+ *  Fehler im Umbruch, nicht wie Absicht. */
+const FOLGE_MIN = 2 * ZEILE;
+
 const FARBE = {
   rot: [0.922, 0.255, 0.216],   // #EB4137
   dunkel: [0.157, 0.157, 0.157], // #282828
@@ -221,6 +230,18 @@ class Dokument {
 
   sicherstellen(hoehe) {
     if (!this.platz(hoehe)) this.neuesBlatt();
+  }
+
+  /** Haelt eine Ueberschrift mit dem zusammen, was unter ihr kommt: passen
+   *  Kopf und Anfang des Folgetextes nicht mehr gemeinsam aufs Blatt, bricht
+   *  schon die Ueberschrift um. Ohne das steht sie allein am Seitenfuss und
+   *  der Text, zu dem sie gehoert, beginnt auf der naechsten Seite.
+   *
+   *  `folgeHoehe` ist die Hoehe dessen, was mindestens mit soll — in der
+   *  Regel {@link FOLGE_MIN}, bei kurzen Bloecken deren ganze Hoehe, damit
+   *  ein Zweizeiler nicht mehr Platz verlangt als er braucht. */
+  zusammenMit(kopfHoehe, folgeHoehe = FOLGE_MIN) {
+    this.sicherstellen(kopfHoehe + folgeHoehe);
   }
 
   absatz(text, { size = 10.5, bold = false, farbe = FARBE.dunkel, zeile = 1.45, x = RAND.links, breiteMax = INHALT_B, abstand = 0 } = {}) {
@@ -451,28 +472,65 @@ export function baueDokument(daten, { titel, logoPfad } = {}) {
   }
 
   punkte.forEach((p, i) => {
-    if (i > 0) {
+    // Erst messen, dann umbrechen entscheiden: die Kopfhoehe haengt daran, auf
+    // wie viele Zeilen der Titel laeuft. Die frueher hier stehende feste
+    // Reserve von 58 pt reichte fuer einen zweizeiligen Titel nicht mehr und
+    // liess unter einem dreizeiligen gar keinen Text uebrig.
+    const titelZeilen = umbrechen(p.titel.toUpperCase(), true, 13, INHALT_B - 30);
+    const kopfHoehe = titelZeilen.length * 16.5 + 11;
+
+    const einzug = RAND.links + 30;
+    const innen = INHALT_B - 30;
+
+    // Hoehe eines Block-Labels samt seinem Abstand nach unten.
+    const labelHoehe = 7.5 * 1.45 + 2;
+    const schrittLabelHoehe = 7.5 * 1.45 + 3;
+
+    /** Hoehe dessen, was als Erstes unter der Ueberschrift kommt. Die
+     *  Ueberschrift muss mit genau DIESEM zusammen aufs Blatt passen, nicht
+     *  mit einer pauschalen Zeilenzahl: der erste Block entscheidet gleich
+     *  danach selbst ueber einen Umbruch, und verlangt er mehr als reserviert
+     *  war, bleibt die Ueberschrift allein am Seitenfuss zurueck. */
+    const ersteFolgeHoehe = () => {
+      const ersterText = p.was_ist_neu ?? p.warum;
+      if (ersterText) {
+        const zeilen = umbrechen(ersterText, false, 10.5, innen);
+        return labelHoehe + Math.min(2, zeilen.length) * ZEILE;
+      }
+      if (p.schritte.length) {
+        const erste = umbrechen(p.schritte[0], false, 10.5, innen - 18);
+        return schrittLabelHoehe + Math.min(2, erste.length) * 15.2;
+      }
+      if (p.hinweise.length) return FOLGE_MIN;
+      return 0; // Ein Punkt, der nur aus einem Titel besteht, braucht nichts darunter.
+    };
+
+    // Trennlinie, Ueberschrift und Textanfang gehoeren zusammen. Reicht der
+    // Platz nicht, beginnt der Punkt auf der neuen Seite — und die Trennlinie
+    // entfaellt dort, statt direkt unter dem Seitenrand zu kleben.
+    const trenner = i > 0 ? 8 + 0.7 + 20 : 0;
+    if (!doc.platz(trenner + kopfHoehe + ersteFolgeHoehe())) {
+      doc.neuesBlatt();
+    } else if (i > 0) {
       doc.y += 8;
       doc.linie(FARBE.linie, 0.7, 20);
     }
 
-    // Ueberschrift nur setzen, wenn darunter noch etwas aufs Blatt passt —
-    // eine allein am Seitenende stehende Nummer sieht nach Fehler aus.
-    doc.sicherstellen(58);
     const kopf = doc.y;
     doc.aktuell.text(String(p.nr), RAND.links, kopf - 2, { size: 17, bold: true, farbe: akzent });
-    const titelZeilen = umbrechen(p.titel.toUpperCase(), true, 13, INHALT_B - 30);
     titelZeilen.forEach((z, k) => {
       doc.aktuell.text(z, RAND.links + 30, kopf + k * 16.5, { size: 13, bold: true });
     });
     doc.y = kopf + titelZeilen.length * 16.5 + 11;
 
-    const einzug = RAND.links + 30;
-    const innen = INHALT_B - 30;
-
     const block = (label, inhalt) => {
       if (!inhalt) return;
-      doc.sicherstellen(26);
+      // Label und Textanfang zusammenhalten. Vorher stand hier 26 pt — zu
+      // wenig fuer Label (12,9) plus zwei Zeilen (30,5), weshalb „WAS IST NEU"
+      // und „WARUM" am Seitenfuss landen konnten, ihr Text aber erst auf der
+      // naechsten Seite begann.
+      const zeilen = umbrechen(inhalt, false, 10.5, innen);
+      doc.zusammenMit(labelHoehe, Math.min(2, zeilen.length) * ZEILE);
       doc.absatz(label, { size: 7.5, bold: true, farbe: akzent, x: einzug, breiteMax: innen, abstand: 2 });
       doc.absatz(inhalt, { x: einzug, breiteMax: innen, abstand: 7 });
     };
@@ -481,7 +539,9 @@ export function baueDokument(daten, { titel, logoPfad } = {}) {
     block('WARUM', p.warum);
 
     if (p.schritte.length) {
-      doc.sicherstellen(26);
+      // Das Label darf nicht ohne seinen ersten Schritt stehen bleiben.
+      const ersterSchritt = umbrechen(p.schritte[0], false, 10.5, innen - 18);
+      doc.zusammenMit(schrittLabelHoehe, Math.min(2, ersterSchritt.length) * 15.2);
       doc.absatz('SO GEHEN SIE VOR', { size: 7.5, bold: true, farbe: akzent, x: einzug, breiteMax: innen, abstand: 3 });
       p.schritte.forEach((schritt, k) => {
         const marke = `${k + 1}.`;
@@ -514,10 +574,13 @@ export function baueDokument(daten, { titel, logoPfad } = {}) {
 
   if (eintraege.length) {
     doc.y += 18;
-    doc.sicherstellen(60);
+    const spalte = 150;
+    // Glossar-Kopf, Linie und der erste Eintrag gehoeren zusammen; sonst
+    // steht „KURZ ERKLÄRT" als letzte Zeile einer Seite.
+    const ersteErklaerung = umbrechen(eintraege[0].erklaerung, false, 10, INHALT_B - spalte);
+    doc.zusammenMit(13 * 1.45 + 5 + 1.6 + 10, Math.min(2, ersteErklaerung.length) * 14.5 + 5);
     doc.absatz('KURZ ERKLÄRT', { size: 13, bold: true, abstand: 5 });
     doc.linie(akzent, 1.6, 10);
-    const spalte = 150;
     for (const g of eintraege) {
       const zeilen = umbrechen(g.erklaerung, false, 10, INHALT_B - spalte);
       doc.sicherstellen(zeilen.length * 14.5 + 8);

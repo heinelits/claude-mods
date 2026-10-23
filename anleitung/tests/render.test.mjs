@@ -87,6 +87,67 @@ test('Viele Punkte erzeugen mehrere Seiten', () => {
   assert.match(doc.bytes().toString('latin1'), /\/Count \d+/);
 });
 
+/** Die gezeichneten Texte einer Seite, ohne die Fussnote, die `fussnoten()`
+ *  nachtraeglich an jede Seite haengt (Dokumenttitel + „Seite N"). Ohne diesen
+ *  Abzug endet keine Seite je mit einer Ueberschrift und der Test waere blind. */
+function seitenTexte(blatt) {
+  const texte = [];
+  for (const op of blatt.ops) {
+    const t = /^\((.*)\) Tj$/.exec(op);
+    if (t) texte.push(t[1]);
+  }
+  if (/^Seite \d+$/.test(texte[texte.length - 1] ?? '')) texte.splice(-2, 2);
+  return texte;
+}
+
+test('Keine Ueberschrift bleibt allein am Seitenfuss zurueck', () => {
+  const labels = ['WAS IST NEU', 'WARUM', 'SO GEHEN SIE VOR', 'BITTE BEACHTEN', 'KURZ ERKLÄRT'];
+  const satz = (n) => Array.from({ length: n }, () => 'Dieser Satz füllt die Seite mit Fließtext.').join(' ');
+
+  // Der Fall, der das ausgeloest hat: das Glossar. Sein Kopf landete am Fuss
+  // der Vorseite, die Eintraege begannen auf der naechsten. Deshalb laeuft
+  // dieser Test ausdruecklich MIT `glossar` — und ueber mehrere Fuellgroessen,
+  // damit die Ueberschriften durch alle Hoehen der Seite wandern.
+  // `punkte = 2` mit diesen Laengen ist der Fall, der die alte Fassung
+  // nachweislich kippte: der Glossar-Kopf stand als letzte Zeile der ersten
+  // Seite, die Eintraege begannen auf der zweiten. Die Schleife variiert
+  // zusaetzlich die Punktzahl, damit der Kopf durch verschiedene Hoehen laeuft.
+  for (const anzahl of [2, 3, 4]) {
+    const daten = {
+      titel: 'Umbruchprobe',
+      einleitung: satz(1),
+      punkte: Array.from({ length: anzahl }, (_, i) => ({
+        titel: `Punkt ${i + 1} mit einer etwas laengeren Ueberschrift`,
+        was_ist_neu: satz(2),
+        warum: satz(1),
+        schritte: ['Menü öffnen', 'Auf Speichern klicken'],
+        hinweise: ['Ein Hinweis dazu.'],
+      })),
+      // Die Erklaerungen sind absichtlich MEHRZEILIG. Mit einer einzeiligen
+      // ersten Erklaerung passte sie noch in den Rest der Seite und der
+      // Fehler trat nicht auf — der Test lief dann gruen an ihm vorbei.
+      glossar: [
+        { begriff: 'Stempel', erklaerung: satz(3) },
+        { begriff: 'Abschluss', erklaerung: satz(2) },
+      ],
+    };
+
+    const doc = baueDokument(daten, { titel: daten.titel });
+    const kapitel = daten.punkte.map((p) => p.titel.toUpperCase());
+
+    doc.blaetter.slice(0, -1).forEach((blatt, seite) => {
+      const texte = seitenTexte(blatt);
+      const letzter = texte[texte.length - 1] ?? '';
+      const istUeberschrift = labels.includes(letzter)
+        || kapitel.some((t) => t.startsWith(letzter) && letzter.length > 8);
+      assert.ok(
+        !istUeberschrift,
+        `Seite ${seite + 1} endet mit der Ueberschrift „${letzter}“ (punkte=${anzahl})`,
+      );
+    });
+  }
+});
+
 test('Klammern und Backslash werden im Inhaltsstrom maskiert', () => {
   const pdf = baueDokument({
     punkte: [{ titel: 'Maskierung', was_ist_neu: 'Ein (geklammerter) Text mit \\ Backslash.' }],
