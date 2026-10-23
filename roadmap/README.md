@@ -18,7 +18,9 @@ A Claude Code mod. It shows a progress bar above the prompt for the project road
 | `/roadmap docs/roadmap/plan.md` | reads only this file; an overview where it lacks the item |
 | `/roadmap auto` | forgets all of the above: back to the session title |
 
-The arguments combine in one line, in any order: `/roadmap an T.2 docs/roadmap/plan.md`. A path may not hold spaces. A line with an unknown word changes nothing. Except when it hides the bar, `/roadmap` also answers with the roadmap as text: bar, the session's item with its status and next step, and the open items.
+The arguments combine in one line, in any order: `/roadmap an T.2 docs/roadmap/plan.md`. A path may not hold spaces. A line with an unknown word changes nothing.
+
+**Local and cloud.** In a local session (terminal, desktop app) the roadmap is the bar above the prompt, and `/roadmap` answers in one line. In a session where no bar is drawn, `/roadmap` answers with the roadmap as text instead: bar, the session's item with its status and next step, and the open items.
 
 The mod reads the roadmap again when the session title changes and every two minutes. It needs `git` for the branch search; without it, it reads the working copy. A branch only counts as far as the local repository has fetched it.
 

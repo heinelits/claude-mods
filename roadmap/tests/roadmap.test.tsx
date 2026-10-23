@@ -126,8 +126,8 @@ test('a file named once shows an overview, and the session keeps it', async ($, 
   await $.classic.UserPromptSubmit({ prompt: 'los', session_title: 'Planung der Module' })
   const ran = await $.command.run(roadmap('docs/roadmap/example.md'))
 
-  expect(ran.text).toContain('Roadmap Example Project')
-  expect(ran.text).not.toContain('Diese Session')
+  // Where the band is drawn, the answer only names what it shows.
+  expect(ran.text).toMatch(/^Roadmap-Leiste: Übersicht von docs\/roadmap\/example\.md \(origin\/planning @ abc1234 · .*\)\.$/)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /2\/9 erledigt/ })).toBeDefined()

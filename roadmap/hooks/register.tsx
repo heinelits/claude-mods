@@ -110,8 +110,8 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // Answers with the roadmap as text every time: where no surface draws the
-  // band (a cloud session), that text is the whole of the mod.
+  // Where a surface draws the band (a local session), the band is the answer;
+  // where none does (a cloud session), the roadmap comes back as text.
   on('command.run', { command: 'roadmap' }, async ($, e) => {
     const args = parseArgs(e.args ?? '')
     if ('error' in args) return { text: `Roadmap: ${args.error}. ${USAGE}` }
@@ -142,7 +142,15 @@ export const register: Register = on => {
     await reload($)
 
     const shown = await read($, view)
-    return { text: shown === null ? `Roadmap: ${(await read($, problem)) ?? 'keine Roadmap gefunden.'}` : asText(shown) }
+    if (shown === null) return { text: `Roadmap: ${(await read($, problem)) ?? 'keine Roadmap gefunden.'}` }
+    if (!isDrawn) return { text: asText(shown) }
+
+    // The band shows it all; the answer only says what it shows.
+    return {
+      text: shown.currentId
+        ? `Roadmap-Leiste: ${shown.currentId} in ${shown.file} (${shown.source}).`
+        : `Roadmap-Leiste: Übersicht von ${shown.file} (${shown.source}).`,
+    }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
