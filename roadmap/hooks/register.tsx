@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RoadmapPin, RoadmapStatus } from '../types'
-import { bar, idFromTitle, isId, short } from './plan'
+import { asText, bar, idFromTitle, parseArgs, short, summarize } from './plan'
 import { findRoadmap } from './source'
 
 const view = atom({ plugin: 'roadmap', key: 'view' } as const, null)
@@ -27,9 +27,7 @@ const COLOR: Record<RoadmapStatus | 'current', string> = {
   current: 'claude',
 }
 
-const ON = ['an', 'on', 'ein', 'show']
-const OFF = ['aus', 'off', 'hide']
-const USAGE = '/roadmap [an|aus|T.2|pfad/zur/roadmap.md|auto]'
+const USAGE = '/roadmap [an|aus] [T.2] [pfad/zur/roadmap.md] oder /roadmap auto'
 
 let lastLoad = 0
 let isStale = true
@@ -84,7 +82,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'roadmap',
       description: 'Fortschritt der Projekt-Roadmap, aus der diese Session einen Punkt abarbeitet',
-      argumentHint: '[an|aus|T.2|pfad.md|auto]',
+      argumentHint: '[an|aus] [T.2] [pfad.md] | auto',
     })
 
     sessionId = await $.session.id()
@@ -112,32 +110,39 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // Answers with the roadmap as text every time: where no surface draws the
+  // band (a cloud session), that text is the whole of the mod.
   on('command.run', { command: 'roadmap' }, async ($, e) => {
-    const arg = (e.args ?? '').trim()
-    const word = arg.toLowerCase()
-    const pinned = await read($, pin)
+    const args = parseArgs(e.args ?? '')
+    if ('error' in args) return { text: `Roadmap: ${args.error}. ${USAGE}` }
 
-    if (OFF.includes(word) || (word === '' && (await read($, isShown)))) {
-      await savePin($, { ...pinned, isHidden: true })
+    const pinned = args.isReset ? {} : await read($, pin)
+    const isBare = args.show === undefined && args.id === undefined && args.file === undefined && !args.isReset
+    const isDrawn = (await $.session.surfaces()).length > 0
+
+    // A bare /roadmap hides a band that shows; with no band to hide, it only reports.
+    const isHidden =
+      args.show !== undefined ? !args.show
+      : isBare && isDrawn && (await read($, isShown)) ? true
+      : args.isReset && !args.id && !args.file ? undefined
+      : false
+
+    await savePin($, {
+      ...pinned,
+      ...(args.id !== undefined && { id: args.id }),
+      ...(args.file !== undefined && { file: args.file }),
+      ...(isHidden !== undefined && { isHidden }),
+    })
+
+    if (isHidden === true) {
       await update($, isShown, () => false)
       return { text: 'Roadmap-Leiste ausgeblendet. /roadmap blendet sie wieder ein.' }
     }
 
-    if (isId(arg)) await savePin($, { ...pinned, id: arg, isHidden: false })
-    else if (arg.endsWith('.md')) await savePin($, { ...pinned, file: arg.replace(/\\/g, '/').replace(/^\.\//, ''), isHidden: false })
-    else if (word === 'auto') await savePin($, {})
-    else if (word === '' || ON.includes(word)) await savePin($, { ...pinned, isHidden: false })
-    else return { text: `Unbekannt. ${USAGE}` }
-
     await reload($)
 
     const shown = await read($, view)
-    if (shown === null) return { text: `Roadmap-Leiste: ${(await read($, problem)) ?? 'keine Roadmap gefunden.'}` }
-    return {
-      text: shown.currentId
-        ? `Roadmap-Leiste: ${shown.currentId} in ${shown.file} (${shown.source}).`
-        : `Roadmap-Leiste: Übersicht von ${shown.file} (${shown.source}).`,
-    }
+    return { text: shown === null ? `Roadmap: ${(await read($, problem)) ?? 'keine Roadmap gefunden.'}` : asText(shown) }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -156,26 +161,9 @@ export const register: Register = on => {
     }
 
     const cols = e.props.bodyColumns
-    const counted = roadmap.items.filter(item => item.status !== 'paused')
-    const done = counted.filter(item => item.status === 'done').length
-    const percent = counted.length === 0 ? 0 : Math.round((done / counted.length) * 100)
-    const current = roadmap.items.find(item => item.id === roadmap.currentId)
-    const open = roadmap.items.filter(
-      item => item.id !== roadmap.currentId && (item.status === 'open' || item.status === 'active'),
-    )
     const width = Math.max(roadmap.items.length, Math.min(60, cols - 24))
     // Two rows of open items at most; a long roadmap ends in a count.
-    const room = cols * 2 - 20
-    const named: string[] = []
-    for (const item of open) {
-      const label = `${item.status === 'active' ? '🔵 ' : ''}${item.id} ${short(item.title, 28)}`.trim()
-      if ([...named, label].join('  ›  ').length > room && named.length > 0) break
-      named.push(label)
-    }
-    const more = open.length - named.length
-    const detail = [current?.stand && `Stand: ${current.stand}`, current?.next && `Nächster Schritt: ${current.next}`]
-      .filter(Boolean)
-      .join(' · ')
+    const { counted, done, percent, current, detail, named, more } = summarize(roadmap, cols * 2 - 20)
 
     return (
       <Box flexDirection="column">
@@ -188,7 +176,7 @@ export const register: Register = on => {
           ))}
           <Text>
             {' '}
-            {done}/{counted.length} erledigt · {percent} %
+            {done}/{counted} erledigt · {percent} %
           </Text>
         </Box>
         {current !== undefined && (
@@ -205,7 +193,7 @@ export const register: Register = on => {
             {detail}
           </Text>
         )}
-        {open.length > 0 && (
+        {named.length > 0 && (
           <Text wrap="wrap">
             <Text dimColor>Offen: </Text>
             {named.join('  ›  ')}

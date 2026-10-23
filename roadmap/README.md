@@ -12,13 +12,17 @@ A Claude Code mod. It shows a progress bar above the prompt for the project road
 
 | Command | Does |
 | --- | --- |
-| `/roadmap` | hides the bar, or shows it again |
+| `/roadmap` | hides the bar, or shows it again; where no bar is drawn, reports the roadmap |
 | `/roadmap an` / `/roadmap aus` | shows / hides it |
 | `/roadmap T.2` | sets the item, where the title has no number |
 | `/roadmap docs/roadmap/plan.md` | reads only this file; an overview where it lacks the item |
 | `/roadmap auto` | forgets all of the above: back to the session title |
 
+The arguments combine in one line, in any order: `/roadmap an T.2 docs/roadmap/plan.md`. A path may not hold spaces. A line with an unknown word changes nothing. Except when it hides the bar, `/roadmap` also answers with the roadmap as text: bar, the session's item with its status and next step, and the open items.
+
 The mod reads the roadmap again when the session title changes and every two minutes. It needs `git` for the branch search; without it, it reads the working copy. A branch only counts as far as the local repository has fetched it.
+
+**Cloud sessions.** There the mod draws no bar: no surface asks it to draw. The session title does not reach it either, so nothing shows by itself. `/roadmap` is the way in: name the item and, where needed, the file once (`/roadmap T.2` or `/roadmap docs/roadmap/plan.md T.2`), and each later `/roadmap` reports the roadmap as text.
 
 ## Install
 

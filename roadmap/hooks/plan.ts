@@ -1,4 +1,4 @@
-import type { RoadmapItem, RoadmapStatus } from '../types'
+import type { RoadmapItem, RoadmapStatus, RoadmapView } from '../types'
 
 /** An item number as roadmaps write them: `S.5`, `T.2`, `D.3`, `S.9b`. */
 const ID = /^([A-Z]{1,3}\.\d+[a-z]?)$/
@@ -158,3 +158,104 @@ export const bar = (
 
 export const short = (text: string, max: number): string =>
   text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}…`
+
+export type Summary = {
+  counted: number
+  done: number
+  percent: number
+  current?: RoadmapItem
+  /** The session's item: its Stand and Nächster Schritt, joined. */
+  detail: string
+  /** Open items as labels, as many as fit in `room` characters. */
+  named: string[]
+  /** Open items past `room`. */
+  more: number
+}
+
+/** What the band and the command's text both show, with `room` characters for the open items. */
+export const summarize = (view: RoadmapView, room: number): Summary => {
+  const counted = view.items.filter(item => item.status !== 'paused')
+  const done = counted.filter(item => item.status === 'done').length
+  const current = view.items.find(item => item.id === view.currentId)
+  const open = view.items.filter(
+    item => item.id !== view.currentId && (item.status === 'open' || item.status === 'active'),
+  )
+
+  const named: string[] = []
+  for (const item of open) {
+    const label = `${item.status === 'active' ? '🔵 ' : ''}${item.id} ${short(item.title, 28)}`.trim()
+    if ([...named, label].join('  ›  ').length > room && named.length > 0) break
+    named.push(label)
+  }
+
+  return {
+    counted: counted.length,
+    done,
+    percent: counted.length === 0 ? 0 : Math.round((done / counted.length) * 100),
+    current,
+    detail: [current?.stand && `Stand: ${current.stand}`, current?.next && `Nächster Schritt: ${current.next}`]
+      .filter(Boolean)
+      .join(' · '),
+    named,
+    more: open.length - named.length,
+  }
+}
+
+/**
+ * The roadmap as plain lines, for the command's own answer: where no surface
+ * draws the band (a cloud session), this is all the person sees.
+ */
+export const asText = (view: RoadmapView): string => {
+  const s = summarize(view, 400)
+  const glyphs = bar(view.items, view.currentId, Math.min(40, Math.max(view.items.length, 20)))
+    .map(run => run.text)
+    .join('')
+
+  return [
+    view.title,
+    `${glyphs}  ${s.done}/${s.counted} erledigt · ${s.percent} %`,
+    `█ erledigt  ${view.currentId ? '▓ diese Session  ' : ''}▒ in Arbeit  ░ offen  · zurückgestellt`,
+    s.current && `▶ Diese Session: ${s.current.id} ${s.current.title}`,
+    s.detail && `  ${s.detail}`,
+    s.named.length > 0 && `Offen: ${s.named.join('  ›  ')}${s.more > 0 ? `  + ${s.more} weitere` : ''}`,
+    `${view.file} · ${view.source}`,
+  ]
+    .filter((line): line is string => typeof line === 'string' && line !== '')
+    .join('\n')
+}
+
+export type RoadmapArgs =
+  | { show?: boolean; id?: string; file?: string; isReset?: boolean }
+  | { error: string }
+
+const ON = ['an', 'on', 'ein', 'show']
+const OFF = ['aus', 'off', 'hide']
+
+/**
+ * `/roadmap`'s arguments one by one, in any order: an/aus, one item number,
+ * one `.md` path (without spaces), auto. Anything else is an error, and
+ * nothing is kept from a line with one.
+ */
+export const parseArgs = (args: string): RoadmapArgs => {
+  const parsed: { show?: boolean; id?: string; file?: string; isReset?: boolean } = {}
+
+  for (const token of args.trim().split(/\s+/).filter(Boolean)) {
+    const word = token.toLowerCase()
+    if (ON.includes(word) || OFF.includes(word)) {
+      if (parsed.show !== undefined) return { error: 'an oder aus nur einmal' }
+      parsed.show = ON.includes(word)
+    } else if (isId(token)) {
+      if (parsed.id !== undefined) return { error: `nur eine Punkt-Nummer, nicht ${parsed.id} und ${token}` }
+      parsed.id = token
+    } else if (word.endsWith('.md')) {
+      if (parsed.file !== undefined) return { error: 'nur eine Roadmap-Datei' }
+      parsed.file = token.replace(/\\/g, '/').replace(/^\.\//, '')
+    } else if (word === 'auto') {
+      parsed.isReset = true
+    } else {
+      return { error: `unbekannt: „${short(token, 40)}“` }
+    }
+  }
+
+  return parsed
+}

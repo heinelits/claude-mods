@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { idFromTitle, parseRoadmap } from '../hooks/plan'
+import { idFromTitle, parseArgs, parseRoadmap } from '../hooks/plan'
 
 const ROADMAP = `# Roadmap Example Project
 
@@ -71,9 +71,10 @@ const ok = (stdout: string) => ({
 })
 
 /** A repository whose one roadmap is committed on another branch. */
-const world = (on: On, store: Record<string, unknown> = {}) => {
+const world = (on: On, store: Record<string, unknown> = {}, surfaces: ('terminal' | 'desktop')[] = ['desktop']) => {
   const clock = mock.clock(on, { now: 1761200000000 })
   mock.store(on, store)
+  on('session.surfaces', () => ({ value: surfaces }))
   on('command.register', () => ({ value: { command: 'roadmap' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: '/repo' }))
@@ -125,7 +126,8 @@ test('a file named once shows an overview, and the session keeps it', async ($, 
   await $.classic.UserPromptSubmit({ prompt: 'los', session_title: 'Planung der Module' })
   const ran = await $.command.run(roadmap('docs/roadmap/example.md'))
 
-  expect(ran.text).toContain('Übersicht von docs/roadmap/example.md')
+  expect(ran.text).toContain('Roadmap Example Project')
+  expect(ran.text).not.toContain('Diese Session')
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /2\/9 erledigt/ })).toBeDefined()
@@ -158,4 +160,36 @@ test('without a number or a file the band stays away', async ($, on) => {
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /engine/ }))?.text).toBe('engine')
   await ui.unmount()
+})
+
+test('the arguments are read one by one, and a bad one keeps nothing', async () => {
+  expect(parseArgs('an T.1 docs/roadmap/x.md')).toEqual({ show: true, id: 'T.1', file: 'docs/roadmap/x.md' })
+  expect(parseArgs(String.raw`docs\roadmap\x.md aus`)).toEqual({ show: false, file: 'docs/roadmap/x.md' })
+  expect(parseArgs('auto')).toEqual({ isReset: true })
+  expect(parseArgs('')).toEqual({})
+  expect(parseArgs('an T.1 docs/my roadmap.md')).toEqual({ error: 'unbekannt: „docs/my“' })
+  expect(parseArgs('S.5 T.2')).toEqual({ error: 'nur eine Punkt-Nummer, nicht S.5 und T.2' })
+})
+
+test('where no surface draws, /roadmap answers with the roadmap as text', async ($, on) => {
+  world(on, {}, [])
+
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: false })
+  const first = await $.command.run(roadmap('an B.2 docs/roadmap/example.md'))
+
+  expect(first.text).toContain('Roadmap Example Project')
+  expect(first.text).toContain('2/9 erledigt · 22 %')
+  expect(first.text).toContain('▶ Diese Session: B.2 Mapping old → new')
+  expect(first.text).toContain('Nächster Schritt: Schritt 1 → Bau → PR')
+  expect(first.text).toContain('Offen: 🔵 B.1 Switches for test mode')
+  expect(first.text).toContain('docs/roadmap/example.md · origin/planning @ abc1234')
+
+  // With no band to hide, a bare /roadmap reports again.
+  const again = await $.command.run(roadmap(''))
+  expect(again.text).toContain('▶ Diese Session: B.2')
+
+  // A line with an unknown word changes nothing.
+  const bad = await $.command.run(roadmap('S.5 typo'))
+  expect(bad.text).toContain('unbekannt: „typo“')
+  expect((await $.command.run(roadmap(''))).text).toContain('▶ Diese Session: B.2')
 })
