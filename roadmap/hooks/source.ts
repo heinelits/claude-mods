@@ -103,20 +103,27 @@ async function label($: EngineInterface, root: string, candidate: Candidate): Pr
 /**
  * The roadmap that holds item `id`: of the files that hold it, the one whose
  * row and title share the most words with the session title, then the newest.
+ * Without an id, the newest version of the one file asked for.
  */
 export async function findRoadmap($: EngineInterface,
-  wanted: { id: string; sessionTitle: string; file?: string },
+  wanted: { id?: string; sessionTitle: string; file?: string },
 ): Promise<RoadmapView | undefined> {
+  if (wanted.id === undefined && wanted.file === undefined) return undefined
+
   const cwd = await $.session.cwd()
   const root = (await git($, cwd, ['rev-parse', '--show-toplevel']))?.trim() || cwd
 
   const scored = (await candidates($, root, wanted.file))
     .map(candidate => {
       const parsed = parseRoadmap(candidate.text)
-      const item = parsed.items.find(one => one.id === wanted.id)
       const title = parsed.title ?? candidate.file.split('/').pop() ?? candidate.file
-      const score = item === undefined ? -1 : overlap(wanted.sessionTitle, { ...item, title: `${item.title} ${title}` })
-      return { candidate, items: parsed.items, title, score }
+      const item = wanted.id === undefined ? undefined : parsed.items.find(one => one.id === wanted.id)
+      // A file asked for by name is shown even where it lacks the id: as an overview.
+      const score =
+        item !== undefined ? overlap(wanted.sessionTitle, { ...item, title: `${item.title} ${title}` })
+        : wanted.file !== undefined ? 0
+        : -1
+      return { candidate, items: parsed.items, title, score, hasItem: item !== undefined }
     })
     .filter(one => one.score >= 0)
     .sort((a, b) => b.score - a.score || b.candidate.time - a.candidate.time)
@@ -129,6 +136,6 @@ export async function findRoadmap($: EngineInterface,
     file: best.candidate.file,
     source: await label($, root, best.candidate),
     items: best.items,
-    currentId: wanted.id,
+    currentId: best.hasItem ? wanted.id : undefined,
   }
 }

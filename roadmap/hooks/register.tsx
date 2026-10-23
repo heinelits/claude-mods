@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { RoadmapStatus } from '../types'
+import type { RoadmapPin, RoadmapStatus } from '../types'
 import { bar, idFromTitle, isId, short } from './plan'
 import { findRoadmap } from './source'
 
@@ -11,8 +11,13 @@ const sessionTitle = atom({ plugin: 'roadmap', key: 'sessionTitle' } as const, n
 const pin = atom({ plugin: 'roadmap', key: 'pin' } as const, {})
 const isShown = atom({ plugin: 'roadmap', key: 'isShown' } as const, false)
 
-/** Read again at most this often while shown; a new title or /roadmap reads at once. */
+/** Read again at most this often; a new title or /roadmap reads at once. */
 const REFRESH_MS = 2 * 60_000
+const TICK_MS = 10_000
+
+/** Pins are kept per session id in the store; the oldest go past this many. */
+const PIN_PREFIX = 'pin:'
+const MAX_PINS = 200
 
 const COLOR: Record<RoadmapStatus | 'current', string> = {
   done: 'success',
@@ -24,10 +29,26 @@ const COLOR: Record<RoadmapStatus | 'current', string> = {
 
 const ON = ['an', 'on', 'ein', 'show']
 const OFF = ['aus', 'off', 'hide']
+const USAGE = '/roadmap [an|aus|T.2|pfad/zur/roadmap.md|auto]'
 
 let lastLoad = 0
 let isStale = true
+let sessionId: string | undefined
 
+async function savePin($: EngineInterface, next: RoadmapPin) {
+  await update($, pin, () => next)
+  if (sessionId === undefined) return
+
+  await $.store.set(`${PIN_PREFIX}${sessionId}`, next)
+  const pins = (await $.store.keys()).filter(key => key.startsWith(PIN_PREFIX))
+  for (const key of pins.slice(0, Math.max(0, pins.length - MAX_PINS))) await $.store.delete(key)
+}
+
+/**
+ * Finds the roadmap again and decides whether the band shows: hidden when the
+ * person hid it, shown when they asked for it, else shown where a roadmap holds
+ * the session title's item.
+ */
 async function reload($: EngineInterface) {
   lastLoad = await $.clock.now()
   isStale = false
@@ -36,23 +57,19 @@ async function reload($: EngineInterface) {
   const pinned = await read($, pin)
   const id = pinned.id ?? idFromTitle(title)
 
-  if (id === undefined) {
-    await update($, view, () => null)
-    await update($, problem, () =>
-      title
-        ? `der Session-Titel „${short(title, 40)}“ beginnt mit keiner Punkt-Nummer. /roadmap T.2 legt sie fest.`
-        : 'kein Session-Titel bekannt. /roadmap T.2 legt die Punkt-Nummer fest.',
-    )
-    return
-  }
+  const found =
+    id === undefined && pinned.file === undefined
+      ? undefined
+      : await findRoadmap($, { id, sessionTitle: title ?? '', file: pinned.file })
 
-  const found = await findRoadmap($, { id, sessionTitle: title ?? '', file: pinned.file })
   await update($, view, () => found ?? null)
-  await update($, problem, () =>
-    found
-      ? null
-      : `Punkt ${id} steht in keiner Roadmap${pinned.file ? ` (${pinned.file})` : ' unter docs/roadmap'}, auf keinem Branch.`,
-  )
+  await update($, isShown, () => (pinned.isHidden === undefined ? found !== undefined : !pinned.isHidden))
+  await update($, problem, () => {
+    if (found) return null
+    if (pinned.file) return `${pinned.file} gibt es weder in der Arbeitskopie noch auf einem Branch.`
+    if (id) return `Punkt ${id} steht in keiner Roadmap unter docs/roadmap, auf keinem Branch.`
+    return `${title ? `der Session-Titel „${short(title, 40)}“ nennt keine Punkt-Nummer` : 'kein Session-Titel bekannt'}. ${USAGE} legt fest, was gezeigt wird.`
+  })
 }
 
 async function noteTitle($: EngineInterface, title: string | undefined) {
@@ -66,12 +83,17 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'roadmap',
-      description: 'Fortschritt der übergreifenden Roadmap, aus der diese Session einen Punkt abarbeitet',
+      description: 'Fortschritt der Projekt-Roadmap, aus der diese Session einen Punkt abarbeitet',
       argumentHint: '[an|aus|T.2|pfad.md|auto]',
     })
-    $.clock.every(30_000, () => {
+
+    sessionId = await $.session.id()
+    const stored = await $.store.get(`${PIN_PREFIX}${sessionId}`)
+    if (typeof stored === 'object' && stored !== null) await update($, pin, () => stored as RoadmapPin)
+    isStale = true
+
+    $.clock.every(TICK_MS, () => {
       void (async () => {
-        if (!(await read($, isShown))) return
         if (isStale || (await $.clock.now()) - lastLoad > REFRESH_MS) await reload($)
       })()
     })
@@ -93,27 +115,28 @@ export const register: Register = on => {
   on('command.run', { command: 'roadmap' }, async ($, e) => {
     const arg = (e.args ?? '').trim()
     const word = arg.toLowerCase()
+    const pinned = await read($, pin)
 
     if (OFF.includes(word) || (word === '' && (await read($, isShown)))) {
+      await savePin($, { ...pinned, isHidden: true })
       await update($, isShown, () => false)
-      return { text: 'Roadmap-Leiste ausgeblendet.' }
+      return { text: 'Roadmap-Leiste ausgeblendet. /roadmap blendet sie wieder ein.' }
     }
 
-    if (isId(arg)) await update($, pin, current => ({ ...current, id: arg }))
-    else if (arg.endsWith('.md')) await update($, pin, current => ({ ...current, file: arg.replace(/\\/g, '/') }))
-    else if (word === 'auto') await update($, pin, () => ({}))
-    else if (word !== '' && !ON.includes(word)) {
-      return { text: 'Unbekannt. /roadmap [an|aus|T.2|pfad/zur/roadmap.md|auto]' }
-    }
+    if (isId(arg)) await savePin($, { ...pinned, id: arg, isHidden: false })
+    else if (arg.endsWith('.md')) await savePin($, { ...pinned, file: arg.replace(/\\/g, '/').replace(/^\.\//, ''), isHidden: false })
+    else if (word === 'auto') await savePin($, {})
+    else if (word === '' || ON.includes(word)) await savePin($, { ...pinned, isHidden: false })
+    else return { text: `Unbekannt. ${USAGE}` }
 
-    await update($, isShown, () => true)
     await reload($)
 
     const shown = await read($, view)
+    if (shown === null) return { text: `Roadmap-Leiste: ${(await read($, problem)) ?? 'keine Roadmap gefunden.'}` }
     return {
-      text: shown
+      text: shown.currentId
         ? `Roadmap-Leiste: ${shown.currentId} in ${shown.file} (${shown.source}).`
-        : `Roadmap-Leiste eingeblendet, aber ${(await read($, problem)) ?? 'keine Roadmap gefunden.'}`,
+        : `Roadmap-Leiste: Übersicht von ${shown.file} (${shown.source}).`,
     }
   })
 
@@ -141,6 +164,15 @@ export const register: Register = on => {
       item => item.id !== roadmap.currentId && (item.status === 'open' || item.status === 'active'),
     )
     const width = Math.max(roadmap.items.length, Math.min(60, cols - 24))
+    // Two rows of open items at most; a long roadmap ends in a count.
+    const room = cols * 2 - 20
+    const named: string[] = []
+    for (const item of open) {
+      const label = `${item.status === 'active' ? '🔵 ' : ''}${item.id} ${short(item.title, 28)}`.trim()
+      if ([...named, label].join('  ›  ').length > room && named.length > 0) break
+      named.push(label)
+    }
+    const more = open.length - named.length
     const detail = [current?.stand && `Stand: ${current.stand}`, current?.next && `Nächster Schritt: ${current.next}`]
       .filter(Boolean)
       .join(' · ')
@@ -159,12 +191,14 @@ export const register: Register = on => {
             {done}/{counted.length} erledigt · {percent} %
           </Text>
         </Box>
-        <Text wrap="truncate-end">
-          <Text color="claude" bold>
-            ▶ Diese Session: {roadmap.currentId}{' '}
+        {current !== undefined && (
+          <Text wrap="truncate-end">
+            <Text color="claude" bold>
+              ▶ Diese Session: {current.id}{' '}
+            </Text>
+            {current.title}
           </Text>
-          {current?.title ?? '(nicht in der Roadmap)'}
-        </Text>
+        )}
         {detail !== '' && (
           <Text dimColor wrap="truncate-end">
             {'  '}
@@ -174,7 +208,8 @@ export const register: Register = on => {
         {open.length > 0 && (
           <Text wrap="wrap">
             <Text dimColor>Offen: </Text>
-            {open.map(item => `${item.status === 'active' ? '🔵 ' : ''}${item.id} ${short(item.title, 28)}`).join('  ›  ')}
+            {named.join('  ›  ')}
+            {more > 0 && <Text dimColor>{`  + ${more} weitere`}</Text>}
           </Text>
         )}
         <Text dimColor wrap="truncate-start">

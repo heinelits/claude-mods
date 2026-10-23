@@ -23,12 +23,15 @@ export type RoadmapView = {
   /** Where it was read: the working copy, or a branch and commit. */
   source: string
   items: RoadmapItem[]
-  /** The item this session works on. */
-  currentId: string
+  /** The item this session works on; absent in an overview of the whole roadmap. */
+  currentId?: string
 }
 
-/** What `/roadmap` fixed for this session, over what the title says. */
-export type RoadmapPin = { id?: string; file?: string }
+/**
+ * What `/roadmap` fixed for this session, over what the title says; kept in
+ * the store under the session's id, so a resumed session keeps it.
+ */
+export type RoadmapPin = { id?: string; file?: string; isHidden?: boolean }
 
 declare module 'claude-code' {
   interface PluginState {

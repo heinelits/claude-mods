@@ -22,8 +22,8 @@ const plain = (text: string): string =>
 export const statusOf = (text: string): RoadmapStatus => {
   if (/✅|\[x\]/i.test(text)) return 'done'
   if (/⏸|zurückgestellt|abgelöst|verworfen/i.test(text)) return 'paused'
-  if (/🔵|in arbeit|in umsetzung/i.test(text)) return 'active'
-  if (/⏳|❓/.test(text)) return 'open'
+  if (/🔵|🔄|in arbeit|in umsetzung/i.test(text)) return 'active'
+  if (/⏳|❓|❌/.test(text)) return 'open'
   if (/\b(gemergt|erledigt|abgeschlossen|done)\b/i.test(text)) return 'done'
   return 'open'
 }
@@ -33,25 +33,42 @@ const cells = (line: string): string[] => {
   return inner.split('|').map(cell => cell.trim())
 }
 
+/**
+ * The items a first cell names: `T.2`, `R.1 Rundgang`, or several with their
+ * own titles (`D.11 Status · D.13 Kunde`, `D.3 / D.9`). A range (`R.2–R.4`)
+ * names none, as its members are not spelled out.
+ */
+const named = (cell: string): { id: string; title: string }[] =>
+  plain(cell)
+    .split(/\s+[·/]\s+/)
+    .map(part => /^([A-Z]{1,3}\.\d+[a-z]?)(?![\w.])\s*(.*)$/.exec(part))
+    .filter((match): match is RegExpExecArray => match !== null && !/^[–-]/.test(match[2] ?? ''))
+    .map(match => ({ id: match[1] ?? '', title: (match[2] ?? '').replace(/^[:–—-]\s*/, '') }))
+
 const isTableRow = (line: string) => /^\s*\|.*\|\s*$/.test(line)
 const isSeparator = (line: string) => /^\s*\|(\s*:?-{2,}:?\s*\|)+\s*$/.test(line)
 
 /**
  * The numbered items of a roadmap in file order: table rows whose first cell
- * is a number, headings that start with one, and checklist lines that do.
- * The first mention of a number wins.
+ * starts with a number, headings that start with one, and checklist lines
+ * that do. The first mention of a number sets its status; a later one only
+ * fills in a title or a column the first lacked.
  */
 export const parseRoadmap = (markdown: string): { title?: string; items: RoadmapItem[] } => {
   const lines = markdown.split(/\r?\n/)
   const items: RoadmapItem[] = []
-  const seen = new Set<string>()
   let title: string | undefined
   let header: string[] = []
 
   const add = (item: RoadmapItem) => {
-    if (seen.has(item.id)) return
-    seen.add(item.id)
-    items.push(item)
+    const known = items.find(one => one.id === item.id)
+    if (known === undefined) {
+      items.push(item)
+      return
+    }
+    if (known.title === '') known.title = item.title
+    known.stand ??= item.stand
+    known.next ??= item.next
   }
 
   lines.forEach((line, i) => {
@@ -65,22 +82,22 @@ export const parseRoadmap = (markdown: string): { title?: string; items: Roadmap
       }
 
       const row = cells(line)
-      const id = plain(row[0] ?? '')
-      if (!isId(id)) return
-
       const column = (pattern: RegExp) => {
         const at = header.findIndex(name => pattern.test(name))
         const cell = at > 0 ? plain(row[at] ?? '') : ''
         return cell === '' || cell === '—' ? undefined : cell
       }
 
-      add({
-        id,
-        title: plain(row[1] ?? ''),
-        status: statusOf(line),
-        stand: column(/^(stand|status)$/),
-        next: column(/nächster schritt|next/),
-      })
+      for (const { id, title: own } of named(row[0] ?? '')) {
+        add({
+          id,
+          // A bare number takes the next cell as its title; `R.1 Rundgang` brings its own.
+          title: own !== '' ? own : isId(plain(row[0] ?? '')) ? plain(row[1] ?? '') : '',
+          status: statusOf(line),
+          stand: column(/^(stand|status)$/),
+          next: column(/nächster schritt|next/),
+        })
+      }
       return
     }
 
@@ -122,7 +139,7 @@ const GLYPH: Record<RoadmapStatus, string> = { done: '█', active: '▒', open:
  */
 export const bar = (
   items: readonly RoadmapItem[],
-  currentId: string,
+  currentId: string | undefined,
   width: number,
 ): { kind: RoadmapStatus | 'current'; text: string }[] => {
   const per = Math.max(1, Math.floor(width / Math.max(1, items.length)))
