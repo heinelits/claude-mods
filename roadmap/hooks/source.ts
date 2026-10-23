@@ -10,7 +10,7 @@ const MAX_FILES = 40
 
 type Candidate = { file: string; source: string; time: number; text: string }
 
-async function git($: EngineInterface, root: string, args: string[]): Promise<string | undefined> {
+export async function git($: EngineInterface, root: string, args: string[]): Promise<string | undefined> {
   const ran = await $.process.run(['git', ...args], { cwd: root, timeoutMs: 15_000 }).catch(() => undefined)
   return ran?.exitCode === 0 ? ran.stdout : undefined
 }
@@ -86,7 +86,7 @@ async function candidates($: EngineInterface, root: string, pinned?: string): Pr
   return [...fromGit, ...fromWorking].filter((one): one is Candidate => one !== undefined)
 }
 
-const when = (ms: number): string => {
+export const when = (ms: number): string => {
   const d = new Date(ms)
   const two = (n: number) => String(n).padStart(2, '0')
   return `${two(d.getDate())}.${two(d.getMonth() + 1)}. ${two(d.getHours())}:${two(d.getMinutes())}`

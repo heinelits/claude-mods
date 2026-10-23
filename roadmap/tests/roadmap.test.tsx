@@ -82,6 +82,7 @@ const world = (on: On, store: Record<string, unknown> = {}, surfaces: ('terminal
   on('classic.UserPromptSubmit', () => ({}))
   on('process.run', (_, e) => {
     const argv = e.argv.join(' ')
+    if (argv.includes('--absolute-git-dir')) return ok('/repo/.git\n')
     if (argv.includes('rev-parse')) return ok('/repo\n')
     if (argv.includes('log --all')) return ok('@abc1234def 1761140000\n\ndocs/roadmap/example.md\n')
     if (argv.includes('status')) return ok('')
@@ -171,8 +172,40 @@ test('the arguments are read one by one, and a bad one keeps nothing', async () 
   expect(parseArgs('S.5 T.2')).toEqual({ error: 'nur eine Punkt-Nummer, nicht S.5 und T.2' })
 })
 
-test('where no surface draws, /roadmap answers with the roadmap as text', async ($, on) => {
+test('where no surface draws, /roadmap publishes the roadmap to the side panel', async ($, on) => {
   world(on, {}, [])
+  const written: { path: string; text: string }[] = []
+  const published: Record<string, unknown>[] = []
+  on('fs.write', (_, e) => {
+    written.push({ path: e.path, text: e.text })
+    return { value: undefined }
+  })
+  on('tool.call', { tool: 'Artifact' }, (_, e) => {
+    published.push({ ...e })
+    return { result: {}, text: 'Published https://claude.ai/code/artifact/0b1c2d3e (private).' }
+  })
+
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: false })
+  const first = await $.command.run(roadmap('B.2 docs/roadmap/example.md'))
+
+  expect(first.text).toBe('Roadmap im Seitenpanel: https://claude.ai/code/artifact/0b1c2d3e (B.2 · 2/9 erledigt · 22 %).')
+  // The engine hands the path on in the host's own spelling.
+  expect(written[0]?.path).toMatch(/[\\/]repo[\\/]\.git[\\/]claude-roadmap[\\/]roadmap-s1\.html$/)
+  expect(written[0]?.text).toContain('<title>Roadmap Example Project</title>')
+  expect(written[0]?.text).toContain('Mapping old → new')
+  expect(written[0]?.text).toContain('Schritt 1 → Bau → PR')
+  expect(published[0]).toMatchObject({ action: 'publish', file_path: '/repo/.git/claude-roadmap/roadmap-s1.html', icon: 'chart' })
+
+  // A later /roadmap updates the same page and keeps its icon.
+  await $.command.run(roadmap(''))
+  expect(published[1]?.file_path).toBe('/repo/.git/claude-roadmap/roadmap-s1.html')
+  expect(published[1]?.icon).toBeUndefined()
+})
+
+test('where the side panel is refused, /roadmap answers with the roadmap as text', async ($, on) => {
+  world(on, {}, [])
+  on('fs.write', () => ({ value: undefined }))
+  on('tool.call', { tool: 'Artifact' }, () => ({ deny: 'Artifacts sind hier ausgeschaltet' }))
 
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: false })
   const first = await $.command.run(roadmap('an B.2 docs/roadmap/example.md'))
@@ -183,6 +216,7 @@ test('where no surface draws, /roadmap answers with the roadmap as text', async 
   expect(first.text).toContain('Nächster Schritt: Schritt 1 → Bau → PR')
   expect(first.text).toContain('Offen: 🔵 B.1 Switches for test mode')
   expect(first.text).toContain('docs/roadmap/example.md · origin/planning @ abc1234')
+  expect(first.text).toContain('(Seitenpanel nicht möglich: Artifacts sind hier ausgeschaltet)')
 
   // With no band to hide, a bare /roadmap reports again.
   const again = await $.command.run(roadmap(''))

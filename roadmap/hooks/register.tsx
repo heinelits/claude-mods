@@ -3,6 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { RoadmapPin, RoadmapStatus } from '../types'
 import { asText, bar, idFromTitle, parseArgs, short, summarize } from './plan'
+import { publishPage } from './publish'
 import { findRoadmap } from './source'
 
 const view = atom({ plugin: 'roadmap', key: 'view' } as const, null)
@@ -111,7 +112,8 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   // Where a surface draws the band (a local session), the band is the answer;
-  // where none does (a cloud session), the roadmap comes back as text.
+  // where none does (a cloud session), an artifact in the side panel is, and
+  // the roadmap as text where that cannot be published.
   on('command.run', { command: 'roadmap' }, async ($, e) => {
     const args = parseArgs(e.args ?? '')
     if ('error' in args) return { text: `Roadmap: ${args.error}. ${USAGE}` }
@@ -143,7 +145,15 @@ export const register: Register = on => {
 
     const shown = await read($, view)
     if (shown === null) return { text: `Roadmap: ${(await read($, problem)) ?? 'keine Roadmap gefunden.'}` }
-    if (!isDrawn) return { text: asText(shown) }
+
+    // No band here: the roadmap goes to the side panel as an artifact, else as text.
+    if (!isDrawn) {
+      const page = await publishPage($, shown, sessionId)
+      const s = summarize(shown, 0)
+      const line = `${shown.currentId ? `${shown.currentId} · ` : ''}${s.done}/${s.counted} erledigt · ${s.percent} %`
+      if (page.error === undefined) return { text: `Roadmap im Seitenpanel${page.url ? `: ${page.url}` : ''} (${line}).` }
+      return { text: `${asText(shown)}\n\n(Seitenpanel nicht möglich: ${page.error})` }
+    }
 
     // The band shows it all; the answer only says what it shows.
     return {

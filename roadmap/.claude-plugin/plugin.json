@@ -1,6 +1,6 @@
 {
   "name": "roadmap",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "/roadmap blendet über dem Prompt den Fortschritt der Projekt-Roadmap ein, aus der diese Session einen Punkt abarbeitet: erledigt, eigener Punkt, offene Punkte.",
   "types": "./types/index.d.ts"
 }

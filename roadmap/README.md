@@ -20,11 +20,11 @@ A Claude Code mod. It shows a progress bar above the prompt for the project road
 
 The arguments combine in one line, in any order: `/roadmap an T.2 docs/roadmap/plan.md`. A path may not hold spaces. A line with an unknown word changes nothing.
 
-**Local and cloud.** In a local session (terminal, desktop app) the roadmap is the bar above the prompt, and `/roadmap` answers in one line. In a session where no bar is drawn, `/roadmap` answers with the roadmap as text instead: bar, the session's item with its status and next step, and the open items.
+**Local and cloud.** In a local session (terminal, desktop app) the roadmap is the bar above the prompt, and `/roadmap` answers in one line. In a session where no bar is drawn, `/roadmap` publishes the roadmap as a private artifact for the side panel instead: count and bar, the session's item with its status and next step, and every item with its status. Each later `/roadmap` in the session updates the same artifact. The page is written to `.git/claude-roadmap/` in the repository, so it never shows as a change. Where the artifact cannot be published, `/roadmap` answers with the roadmap as text and says why.
 
 The mod reads the roadmap again when the session title changes and every two minutes. It needs `git` for the branch search; without it, it reads the working copy. A branch only counts as far as the local repository has fetched it.
 
-**Cloud sessions.** There the mod draws no bar: no surface asks it to draw. The session title does not reach it either, so nothing shows by itself. `/roadmap` is the way in: name the item and, where needed, the file once (`/roadmap T.2` or `/roadmap docs/roadmap/plan.md T.2`), and each later `/roadmap` reports the roadmap as text.
+**Cloud sessions.** There the mod draws no bar: no surface asks it to draw. The session title does not reach it either, so nothing shows by itself. `/roadmap` is the way in: name the item and, where needed, the file once (`/roadmap T.2` or `/roadmap docs/roadmap/plan.md T.2`), and each later `/roadmap` updates the artifact in the side panel.
 
 ## Install
 
