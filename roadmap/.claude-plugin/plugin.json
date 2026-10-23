@@ -1,0 +1,6 @@
+{
+  "name": "roadmap",
+  "version": "0.1.0",
+  "description": "/roadmap blendet über dem Prompt eine Fortschrittsleiste der aktuellen Aufgabenliste ein: erledigt, aktueller Punkt, offene Punkte.",
+  "types": "./types/index.d.ts"
+}

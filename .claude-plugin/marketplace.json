@@ -1,0 +1,6 @@
+{
+  "name": "heinel-mods",
+  "owner": { "name": "Sebastian Heinel" },
+  "description": "Claude Code mods by Sebastian Heinel.",
+  "plugins": [{ "name": "roadmap", "source": "./roadmap" }]
+}
